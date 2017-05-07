@@ -80,6 +80,8 @@ class KagglePlanetImage(object):
 
     label_processor = KagglePlanetImageLabels()
     NUM_TRAIN_IMAGES = 40479
+    HEIGHT, WIDTH, DEPTH = 256, 256, 4
+    SIZE = HEIGHT * WIDTH * DEPTH
 
     def __init__(self, seqnum, is_training_image=True):
         """ Initialize with sequence number. If is_training_image is False, then read from the test
@@ -139,8 +141,7 @@ class KagglePlanetImage(object):
     
     @property
     def ndvi(self):
-        normalized = self.image * 1. / self.image.max()
-        return (normalized[:,:,3] - normalized[:,:,0]) / (normalized[:,:,3] + normalized[:,:,0])
+        return (self.nir - self.red) / (self.nir + self.red)
 
 
 def serialize_batch(filename, start=0, end=KagglePlanetImage.NUM_TRAIN_IMAGES, verbose_step=500):
