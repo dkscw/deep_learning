@@ -60,7 +60,7 @@ class KagglePlanetImageLabels(object):
             use_labels += self.SPECIAL_LABELS
 
         labels = self.get_labels(seqnum)
-        return np.array([l in labels for l in use_labels]).astype(int)
+        return np.array([l in labels for l in use_labels]).astype(np.uint8)
 
     @staticmethod
     def _process_all_labels():
