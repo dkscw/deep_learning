@@ -3,6 +3,7 @@ General utility functions for reading and processing Kaggle-Planet images
 """
 import os
 import csv
+import sys
 import numpy as np
 import skimage.io
 import tensorflow as tf
@@ -160,4 +161,5 @@ def serialize_batch(filename, start=0, end=KagglePlanetImage.NUM_TRAIN_IMAGES, v
 
 if __name__ == '__main__':
     """ Example: Serialize a batch of 10000 images """
-    serialize_batch(os.path.join(DATA_DIR, 'protobuf', 'train.0_10000.tfrecords'), 0, 10000)
+    img_index = int(sys.argv[1])
+    serialize_batch(os.path.join(DATA_DIR, 'protobuf', 'train.0_{}.tfrecords'.format(img_index)), 0, img_index)

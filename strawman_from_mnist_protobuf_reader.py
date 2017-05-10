@@ -34,7 +34,8 @@ def read_and_decode(filename_queue):
   # Convert from a scalar string tensor (whose single string has
   # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
   # [mnist.IMAGE_PIXELS].
-  image = tf.decode_raw(features['image_raw'], tf.float32)
+  image = tf.decode_raw(features['image_raw'], tf.float64)
+  image = tf.cast(image, tf.float32)
   image.set_shape([Image.SIZE])
 
   # # OPTIONAL: Could reshape into a 28x28 image and apply distortions
@@ -45,12 +46,32 @@ def read_and_decode(filename_queue):
   # # Convert from [0, 255] -> [-0.5, 0.5] floats.
   # image = tf.cast(image, tf.float32) * (1. / 255) - 0.5
 
-  # Convert label from a scalar uint8 tensor to an int32 scalar.
-  labels = tf.decode_raw(features['labels'], tf.uint8)
-  labels.set_shape([N_LABELS])
+  # Labels are saved as a string of length 10, but for some reason reading as tf.uint8
+  # blows up by a factor of 8. Should probably save them as ints. 
+  labels = tf.decode_raw(features['labels'], tf.int64)
   labels = tf.cast(labels, tf.float32)
+  labels.set_shape([N_LABELS])
   return image, labels
 
+
+def debug_inputs():
+  '''
+  show tfrecords image for debug.
+  '''
+  filename = os.path.join(DATA_DIR, 'protobuf', 'train.0_10000.tfrecords')
+  filename_queue = tf.train.string_input_producer([filename])
+  image, labels = read_and_decode(filename_queue)
+
+  init_op = tf.initialize_all_variables()
+  with tf.Session() as sess:
+      sess.run(init_op)
+      coord = tf.train.Coordinator()
+      threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+      for i in range(4):
+          print(image.get_shape())
+          print(image.eval().shape)
+          print(labels.get_shape())
+          print(labels.eval())
 
 def inputs(batch_size, num_epochs):
   """Reads input data num_epochs times.
@@ -83,7 +104,7 @@ def inputs(batch_size, num_epochs):
     # (Internally uses a RandomShuffleQueue.)
     # We run this in two threads to avoid being a bottleneck.
     images, labels = tf.train.shuffle_batch(
-        [image, labels], batch_size=batch_size, num_threads=2,
+        [image, labels], batch_size=batch_size, num_threads=1,
         capacity=1000 + 3 * batch_size,
         # Ensures a minimum amount of shuffling of examples.
         min_after_dequeue=1000)
@@ -136,7 +157,7 @@ def run_training():
         duration = time.time() - start_time
 
         # Print an overview fairly often.
-        if step % 100 == 0:
+        if step % 25 == 0:
           print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value,
                                                      duration))
         step += 1
@@ -231,6 +252,7 @@ def bias_variable(shape):
 
 
 def main(_):
+  # debug_inputs()
   run_training()
 
 if __name__ == '__main__':
