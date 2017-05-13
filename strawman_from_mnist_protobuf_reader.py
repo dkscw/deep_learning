@@ -8,6 +8,8 @@ import os
 import sys
 import time
 import argparse
+import numpy as np
+from scipy.special import logit
 import tensorflow as tf
 
 from utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLabels, DATA_DIR
@@ -54,11 +56,8 @@ def read_and_decode(filename_queue):
   return image, labels
 
 
-def debug_inputs():
-  '''
-  show tfrecords image for debug.
-  '''
-  filename = os.path.join(DATA_DIR, 'protobuf', 'train.0_10000.tfrecords')
+def debug_inputs(filename):
+  " show tfrecords image for debug. "
   filename_queue = tf.train.string_input_producer([filename])
   image, labels = read_and_decode(filename_queue)
 
@@ -73,10 +72,10 @@ def debug_inputs():
           print(labels.get_shape())
           print(labels.eval())
 
-def inputs(batch_size, num_epochs):
+def inputs(filename, batch_size, num_epochs):
   """Reads input data num_epochs times.
   Args:
-    train: Selects between the training (True) and validation (False) data.
+    filename: input filename to read from
     batch_size: Number of examples per returned batch.
     num_epochs: Number of times to read the input data, or 0/None to
        train forever.
@@ -90,7 +89,6 @@ def inputs(batch_size, num_epochs):
     must be run using e.g. tf.train.start_queue_runners().
   """
   if not num_epochs: num_epochs = None
-  filename = os.path.join(DATA_DIR, 'protobuf', 'train.0_10000.tfrecords')
 
   with tf.name_scope('input'):
     filename_queue = tf.train.string_input_producer(
@@ -110,13 +108,39 @@ def inputs(batch_size, num_epochs):
         min_after_dequeue=1000)
     return images, labels
 
-def run_training():
-  """Train MNIST for a number of steps."""
+def get_metric_ops(logits, labels, cutoff=0.5):
+  """ Build metric ops with uniform cutoff """
+  preds = tf.greater(logits, logit(cutoff))
+  preds = tf.cast(preds, tf.float32)
+              
+  # Count true positives, true negatives, false positives and false negatives.
+  tp = tf.count_nonzero(preds * labels, axis=1)
+  tn = tf.count_nonzero((1 - preds) * (1 - labels), axis=1)
+  fp = tf.count_nonzero(preds * (1 - labels), axis=1)
+  fn = tf.count_nonzero((1 - preds) * labels, axis=1)
+      
+  # Calculate accuracy, precision, recall and F2 score.
+  precision = tp / (tp + fp)
+  recall = tp / (tp + fn)
+  f2_score = (5 * precision * recall) / (4 * precision + recall)
 
+  # Replace nans with zeros
+  def replace_nans(tensor):
+    return tf.where(tf.is_nan(tensor), tf.zeros_like(tensor), tensor)
+
+  precision = replace_nans(precision)
+  recall = replace_nans(recall)
+  f2_score = replace_nans(f2_score)
+
+  return tp, tn, fn, tf.reduce_mean(precision), tf.reduce_mean(recall), tf.reduce_mean(f2_score)
+
+
+def run_training(training_filename):
+  """Train MNIST for a number of steps."""
   # Tell TensorFlow that the model will be built into the default Graph.
   with tf.Graph().as_default():
     # Input images and labels. Default values for now, read from args later
-    images, labels = inputs(batch_size=50, num_epochs=1)
+    images, labels = inputs(training_filename, batch_size=50, num_epochs=1)
 
     # Build a Graph that computes predictions from the inference model.
     logits = strawman(images)
@@ -130,6 +154,10 @@ def run_training():
     init_op = tf.group(tf.global_variables_initializer(),
                        tf.local_variables_initializer())
 
+    tp, tn, fn, precision_op, recall_op, f2_op = get_metric_ops(logits, labels, cutoff=0.1)
+
+    preds = tf.greater(logits, logit(.1))
+    preds = tf.cast(preds, tf.float32)
     # Create a session for running operations in the Graph.
     sess = tf.Session()
 
@@ -146,20 +174,24 @@ def run_training():
       while not coord.should_stop():
         start_time = time.time()
 
-        # Run one step of the model.  The return values are
-        # the activations from the `train_op` (which is
-        # discarded) and the `loss` op.  To inspect the values
-        # of your ops or variables, you may include them in
-        # the list passed to sess.run() and the value tensors
-        # will be returned in the tuple from the call.
-        _, loss_value = sess.run([train_op, loss])
-
+        # Run one step of the model.  The return values are the activations from the `train_op`
+        # (which is discarded) and the `loss` op.  To inspect the values of your ops or variables,
+        # you may include them in the list passed to sess.run() and the value tensors will be
+        # returned in the tuple from the call.
+        _, loss_value, f2_score = sess.run([train_op, loss, f2_op])
         duration = time.time() - start_time
 
         # Print an overview fairly often.
         if step % 25 == 0:
-          print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value,
-                                                     duration))
+          # Add metrics to TensorBoard.    
+          # tf.summary.scalar('Precision', precision)
+          # tf.summary.scalar('Recall', recall)
+          # tf.summary.scalar('f2-score', f2_score)
+
+          print('Step {}: loss = {:.3f}, F2 = {:.3f}  ({:.3f} sec)'
+                .format(step, loss_value, f2_score, duration))
+
+
         step += 1
     except tf.errors.OutOfRangeError:
       print('Done training for %d epochs, %d steps.' % (1, step))
@@ -250,15 +282,19 @@ def bias_variable(shape):
   initial = tf.constant(0.1, shape=shape)
   return tf.Variable(initial)
 
+def get_filename(dataset, start_idx, end_idx):
+  """ Get filename with given start, end indices. No filename validation. """
+  assert dataset in ['train', 'test', 'validation'], \
+         "dataset must be one of train, test, validation"
+  return os.path.join(DATA_DIR, 'protobuf', 
+                      'images.{}.{}_{}.proto'.format(dataset, start_idx, end_idx))
 
 def main(_):
-  # debug_inputs()
-  run_training()
+  filename = get_filename('train', 0, 9999)
+  # debug_inputs(filename)
+  run_training(filename)
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  # parser.add_argument('--data_dir', type=str,
-  #                     default='/tmp/tensorflow/mnist/input_data',
-  #                     help='Directory for storing input data')
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)

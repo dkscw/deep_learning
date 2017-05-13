@@ -4,6 +4,7 @@ General utility functions for reading and processing Kaggle-Planet images
 import os
 import csv
 import sys
+import argparse
 import numpy as np
 import skimage.io
 import tensorflow as tf
@@ -159,7 +160,22 @@ def serialize_batch(filename, start=0, end=KagglePlanetImage.NUM_TRAIN_IMAGES, v
             pass
     writer.close()
 
+def parse_args():
+    """ Parse command line arguments """
+    parser = argparse.ArgumentParser()
+  
+    parser.add_argument('-s', '--start_idx', help='start index', type=int, default=0)
+    parser.add_argument('-e', '--end_idx', help='end index (inclusive)', type=int,
+                        default=KagglePlanetImage.NUM_TRAIN_IMAGES)
+    parser.add_argument('-d', '--dataset', type=str, default='train',
+                        help='data set type, default train. added to output filename')
+                        
+    return parser.parse_args()
+
 if __name__ == '__main__':
     """ Example: Serialize a batch of 10000 images """
-    img_index = int(sys.argv[1])
-    serialize_batch(os.path.join(DATA_DIR, 'protobuf', 'train.0_{}.tfrecords'.format(img_index)), 0, img_index)
+    args = parse_args()
+    out_filename = 'images.{a.dataset}.{a.start_idx}_{a.end_idx}.proto'.format(a=args)
+    serialize_batch(os.path.join(DATA_DIR, 'protobuf', out_filename), 
+                    args.start_idx, args.end_idx + 1)  # end index is inclusive 
+
