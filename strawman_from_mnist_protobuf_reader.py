@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import argparse
+from collections import OrderedDict
 import numpy as np
 from scipy.special import logit
 import tensorflow as tf
@@ -17,42 +18,27 @@ from read_data import read_data_sets
 
 FLAGS = None
 
-N_LABELS = len(ImageLabels.COMMON_LABELS)
-
 def read_and_decode(filename_queue):
   reader = tf.TFRecordReader()
   _, serialized_example = reader.read(filename_queue)
-  features = tf.parse_single_example(
-      serialized_example,
-      # Defaults are not specified since both keys are required.
-      features={
-          'height': tf.FixedLenFeature([], tf.int64),
-          'width': tf.FixedLenFeature([], tf.int64),
-          'depth': tf.FixedLenFeature([], tf.int64),
-          'image_raw': tf.FixedLenFeature([], tf.string),
-          'labels': tf.FixedLenFeature([], tf.string)
-      })
 
-  # Convert from a scalar string tensor (whose single string has
-  # length mnist.IMAGE_PIXELS) to a uint8 tensor with shape
-  # [mnist.IMAGE_PIXELS].
+  # Build the feature dict with keys image_raw, weather, common, special
+  feature_dict = {'image_raw': tf.FixedLenFeature([], tf.string)}
+  for label_type, labels in ImageLabels.LABELS.items():
+    shape = [len(labels)]
+    feature_dict[label_type] = tf.FixedLenFeature(shape, tf.int64)
+
+  features = tf.parse_single_example(serialized_example, features=feature_dict)
+
+  # Convert from a scalar string tensor to a uint8 tensor
   image = tf.decode_raw(features['image_raw'], tf.float64)
   image = tf.cast(image, tf.float32)
   image.set_shape([Image.SIZE])
 
-  # # OPTIONAL: Could reshape into a 28x28 image and apply distortions
-  # # here.  Since we are not applying any distortions in this
-  # # example, and the next step expects the image to be flattened
-  # # into a vector, we don't bother.
+  labels = OrderedDict()
+  for label_type  in ImageLabels.LABELS:
+    labels[label_type] = tf.cast(features[label_type], tf.float32)
 
-  # # Convert from [0, 255] -> [-0.5, 0.5] floats.
-  # image = tf.cast(image, tf.float32) * (1. / 255) - 0.5
-
-  # Labels are saved as a string of length 10, but for some reason reading as tf.uint8
-  # blows up by a factor of 8. Should probably save them as ints. 
-  labels = tf.decode_raw(features['labels'], tf.int64)
-  labels = tf.cast(labels, tf.float32)
-  labels.set_shape([N_LABELS])
   return image, labels
 
 
@@ -69,8 +55,10 @@ def debug_inputs(filename):
       for i in range(4):
           print(image.get_shape())
           print(image.eval().shape)
-          print(labels.get_shape())
-          print(labels.eval())
+          print(labels['weather'].get_shape())
+          print(labels['weather'].eval())
+          print(labels['common'].get_shape())
+          print(labels['common'].eval())
 
 def inputs(filename, batch_size, num_epochs):
   """Reads input data num_epochs times.
@@ -96,30 +84,53 @@ def inputs(filename, batch_size, num_epochs):
 
     # Even when reading in multiple threads, share the filename
     # queue.
-    image, labels = read_and_decode(filename_queue)
+    image, image_labels = read_and_decode(filename_queue)
 
-    # Shuffle the examples and collect them into batch_size batches.
-    # (Internally uses a RandomShuffleQueue.)
-    # We run this in two threads to avoid being a bottleneck.
-    images, labels = tf.train.shuffle_batch(
-        [image, labels], batch_size=batch_size, num_threads=1,
+    # Shuffle the examples and collect them into batch_size batches. Runs in two threads to avoid
+    # being a bottleneck. While image_labels was a dict, shuffle batch expects tensors. So this will
+    # return a list of tensors which we reconstruct into a dict.
+    shuffled = tf.train.shuffle_batch(
+        [image] + image_labels.values(), batch_size=batch_size, num_threads=1,
         capacity=1000 + 3 * batch_size,
         # Ensures a minimum amount of shuffling of examples.
         min_after_dequeue=1000)
+
+    images = shuffled[0]
+    labels = OrderedDict()
+    for label_type, label_tensor in zip(image_labels.keys(), shuffled[1:]):
+      labels[label_type] = label_tensor
+
     return images, labels
+
 
 def get_metric_ops(logits, labels, cutoff=0.5):
   """ Build metric ops with uniform cutoff """
-  preds = tf.greater(logits, logit(cutoff))
+  # we have multiple label classes (weather/common/special) but the metrics apply to all labels
+  # together. Other types are multilabeled.
+  # TODO: Replace with metrics from tf.conrib.metrics 
+  def confusion_matrix(preds, labels):
+    "Count true positives, true negatives, false positives and false negatives"
+    tp = tf.count_nonzero(preds * labels, axis=1)
+    fp = tf.count_nonzero(preds * (1 - labels), axis=1)
+    tn = tf.count_nonzero((1 - preds) * (1 - labels), axis=1)
+    fn = tf.count_nonzero((1 - preds) * labels, axis=1)
+    return tp, fp, tn, fn
+
+  # Weather labels are mutually exclusive, so we pick argmax for the prediction and one-hot encode
+  # them so we can count tp, fp, etc.
+  preds = tf.one_hot(tf.argmax(logits['weather'], axis=1), depth=len(ImageLabels.LABELS['weather']))
+  tp, fp, tn, fn = confusion_matrix(preds, labels['weather'])
+
+  # We currently do not predict special labels. Add common label results to the current counts.
+  preds = tf.greater(logits['common'], logit(cutoff))
   preds = tf.cast(preds, tf.float32)
-              
-  # Count true positives, true negatives, false positives and false negatives.
-  tp = tf.count_nonzero(preds * labels, axis=1)
-  tn = tf.count_nonzero((1 - preds) * (1 - labels), axis=1)
-  fp = tf.count_nonzero(preds * (1 - labels), axis=1)
-  fn = tf.count_nonzero((1 - preds) * labels, axis=1)
+  common_tp, common_fp, common_tn, common_fn = confusion_matrix(preds, labels['common'])
+  tp += common_tp
+  fp += common_fp
+  tn += common_tn
+  fn += common_fn
       
-  # Calculate accuracy, precision, recall and F2 score.
+  # Calculate precision, recall and F2 score.
   precision = tp / (tp + fp)
   recall = tp / (tp + fn)
   f2_score = (5 * precision * recall) / (4 * precision + recall)
@@ -132,7 +143,7 @@ def get_metric_ops(logits, labels, cutoff=0.5):
   recall = replace_nans(recall)
   f2_score = replace_nans(f2_score)
 
-  return tp, tn, fn, tf.reduce_mean(precision), tf.reduce_mean(recall), tf.reduce_mean(f2_score)
+  return tf.reduce_mean(precision), tf.reduce_mean(recall), tf.reduce_mean(f2_score)
 
 
 def run_training(training_filename):
@@ -145,19 +156,22 @@ def run_training(training_filename):
     # Build a Graph that computes predictions from the inference model.
     logits = strawman(images)
 
-    # Add to the Graph the loss calculation.
-    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(targets=labels, logits=logits))
+    # Add to the Graph the loss calculation. Weather labels are mutually exclusive, so we use softmax
+    # other labels are not exclusive, so use a sigmoid. For now don't include special labels in the
+    # loss function
+    loss_op = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                 labels=labels['weather'], logits=logits['weather'])) + \
+              tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+                 targets=labels['common'], logits=logits['common']))
 
-    train_op = tf.train.AdamOptimizer(1e-4).minimize(loss)
+    train_op = tf.train.AdamOptimizer(1e-4).minimize(loss_op)
 
     # The op for initializing the variables.
     init_op = tf.group(tf.global_variables_initializer(),
                        tf.local_variables_initializer())
 
-    tp, tn, fn, precision_op, recall_op, f2_op = get_metric_ops(logits, labels, cutoff=0.1)
+    precision_op, recall_op, f2_op = get_metric_ops(logits, labels, cutoff=0.1)
 
-    preds = tf.greater(logits, logit(.1))
-    preds = tf.cast(preds, tf.float32)
     # Create a session for running operations in the Graph.
     sess = tf.Session()
 
@@ -173,16 +187,18 @@ def run_training(training_filename):
       step = 0
       while not coord.should_stop():
         start_time = time.time()
+        is_summary_step = (step % 25) == 0
 
-        # Run one step of the model.  The return values are the activations from the `train_op`
-        # (which is discarded) and the `loss` op.  To inspect the values of your ops or variables,
-        # you may include them in the list passed to sess.run() and the value tensors will be
-        # returned in the tuple from the call.
-        _, loss_value, f2_score = sess.run([train_op, loss, f2_op])
+        ops_to_compute = [train_op]
+        if is_summary_step:
+          ops_to_compute.extend([loss_op, f2_op])
+
+        op_values = sess.run(ops_to_compute)
         duration = time.time() - start_time
 
         # Print an overview fairly often.
-        if step % 25 == 0:
+        if is_summary_step:
+          loss_value, f2_score = op_values[1:]
           # Add metrics to TensorBoard.    
           # tf.summary.scalar('Precision', precision)
           # tf.summary.scalar('Recall', recall)
@@ -190,7 +206,6 @@ def run_training(training_filename):
 
           print('Step {}: loss = {:.3f}, F2 = {:.3f}  ({:.3f} sec)'
                 .format(step, loss_value, f2_score, duration))
-
 
         step += 1
     except tf.errors.OutOfRangeError:
@@ -218,11 +233,6 @@ def strawman(x):
   # Reshape to use within a convolutional neural net.
   x_image = tf.reshape(x, [-1, Image.HEIGHT, Image.WIDTH, Image.DEPTH])
 
-  # First convolutional layer - maps one grayscale image to 32 feature maps.
-  # W_conv1 = weight_variable([5, 5, 1, 32])
-  # b_conv1 = bias_variable([32])
-  # h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
-
   # Pooling layer - downsamples by 16X to dimension 16x16x4
   filter_size = 16
   h_pool1 = max_pool(x_image, filter_size)
@@ -231,13 +241,22 @@ def strawman(x):
   flat_dim = int(Image.SIZE / (filter_size) ** 2)
   h_pool1_flat = tf.reshape(h_pool1, [-1, flat_dim])
 
-  # Second convolutional layer -- maps 32 feature maps to 64.
-  # W_conv2 = weight_variable([5, 5, 32, 64])
-  # b_conv2 = bias_variable([64])
-  # h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+  # Map the 1024 features to weather and common classes
+  weights = OrderedDict()
+  biases = OrderedDict()
+  logits = OrderedDict()
+  for label_type in ImageLabels.LABELS:
+      n_classes = len(ImageLabels.LABELS[label_type])
+      weights[label_type] = weight_variable([flat_dim, n_classes])
+      biases[label_type] = bias_variable([n_classes])
+      logits[label_type] = tf.matmul(h_pool1_flat, weights[label_type]) + biases[label_type]
 
-  # Second pooling layer.
-  # h_pool2 = max_pool_2x2(h_conv2)
+  return logits
+
+  # First convolutional layer - maps one grayscale image to 32 feature maps.
+  # W_conv1 = weight_variable([5, 5, 1, 32])
+  # b_conv1 = bias_variable([32])
+  # h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
 
   # Fully connected layer 1 -- after 2 round of downsampling, our 28x28 image
   # is down to 7x7x64 feature maps -- maps this to 1024 features.
@@ -252,12 +271,6 @@ def strawman(x):
   # keep_prob = tf.placeholder(tf.float32)
   # h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
-  # Map the 1024 features to 10 classes, one for each digit
-  W_fc2 = weight_variable([flat_dim, N_LABELS])
-  b_fc2 = bias_variable([N_LABELS])
-
-  y_conv = tf.matmul(h_pool1_flat, W_fc2) + b_fc2
-  return y_conv  # , keep_prob
 
 
 # def conv2d(x, W):
@@ -290,7 +303,7 @@ def get_filename(dataset, start_idx, end_idx):
                       'images.{}.{}_{}.proto'.format(dataset, start_idx, end_idx))
 
 def main(_):
-  filename = get_filename('train', 0, 9999)
+  filename = get_filename('train', 0, 1999)
   # debug_inputs(filename)
   run_training(filename)
 

@@ -4,6 +4,8 @@ General utility functions for reading and processing Kaggle-Planet images
 import os
 import csv
 import sys
+from collections import OrderedDict
+
 import argparse
 import numpy as np
 import skimage.io
@@ -27,25 +29,25 @@ class TFFeature(object):
 
 class KagglePlanetImageLabels(object):
     """ Class to handle image labels. Only needs to be initialized once. """
-
-    COMMON_LABELS = ['primary',
-                     'clear',
-                     'agriculture',
-                     'road',
-                     'water',
-                     'partly_cloudy',
-                     'cultivation',
-                     'habitation',
-                     'haze',
-                     'cloudy']
-
-    SPECIAL_LABELS = ['bare_ground',
-                      'selective_logging',
-                      'artisinal_mine',
-                      'blooming',
-                      'slash_burn',
-                      'blow_down',
-                      'conventional_mine']
+    LABELS = OrderedDict([
+        ('weather', ['clear',
+                    'partly_cloudy',
+                    'haze',
+                    'cloudy']),
+        ('common', ['primary',
+                   'agriculture',
+                   'road',
+                   'water',
+                   'cultivation',
+                   'habitation']),
+        ('special', ['bare_ground',
+                    'selective_logging',
+                    'artisinal_mine',
+                    'blooming',
+                    'slash_burn',
+                    'blow_down',
+                    'conventional_mine'])
+    ])
 
     def __init__(self):
         self.all_image_labels = self._process_all_labels()
@@ -54,15 +56,11 @@ class KagglePlanetImageLabels(object):
         "Return the labels for the training image with the given sequence number"
         return self.all_image_labels[seqnum]
 
-    def get_labels_as_array(self, seqnum, include_special_labels=False):
-        """ Return the labels for the training image with the given sequence number as a binary
-        numpy array. By default includes only common labels. """
-        use_labels = self.COMMON_LABELS
-        if include_special_labels:
-            use_labels += self.SPECIAL_LABELS
-
+    def get_label_array(self, seqnum, label_type):
+        """ Get the labels of given type as an array """
+        ref_labels = self.LABELS[label_type]
         labels = self.get_labels(seqnum)
-        return np.array([l in labels for l in use_labels]).astype(np.uint8)
+        return np.array([l in labels for l in ref_labels]).astype(np.int64)
 
     @staticmethod
     def _process_all_labels():
@@ -95,9 +93,11 @@ class KagglePlanetImage(object):
         self.image, self.jpg = self._read_image()
         self.image = self.image * 1. / self.image.max()  # Normalize
         # Labels. For now only process common labels.
-        self.labels = self.label_processor.get_labels(seqnum) if self.is_training_image else None
-        self.label_array = self.label_processor.get_labels_as_array(seqnum) if \
-            self.is_training_image else None
+        self.labels = None
+        if self.is_training_image:
+            self.labels = OrderedDict()
+            for label_type in self.label_processor.LABELS:
+                self.labels[label_type] = self.label_processor.get_label_array(seqnum, label_type)
 
     def _read_image(self):
         """ Read the image, both tif and jpg. The tif returns a 256x256x4 numpy array """
@@ -108,13 +108,16 @@ class KagglePlanetImage(object):
 
     def as_feature_dict(self):
         """ Return a dict representation of the image where the values are tensorflow features """
-        return {
-            'height': TFFeature.int64_feature(self.image.shape[0]),
-            'width': TFFeature.int64_feature(self.image.shape[1]),
-            'depth': TFFeature.int64_feature(self.image.shape[2]),
-            'image_raw': TFFeature.bytes_feature(self.image.tostring()),
-            'labels': TFFeature.bytes_feature(self.label_array.tostring())
-        }
+        # Image feature
+        image_byteslist = tf.train.BytesList(value=[self.image.tostring()])
+        features = {'image_raw': tf.train.Feature(bytes_list=image_byteslist)}
+        
+        # Label features
+        for label_type in self.label_processor.LABELS:
+            features[label_type] = tf.train.Feature(
+                int64_list=tf.train.Int64List(value=self.labels[label_type]))
+
+        return features
 
     def as_protobuf(self):
         """ Return the image as a serialized protobuf """
