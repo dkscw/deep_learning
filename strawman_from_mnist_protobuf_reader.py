@@ -17,8 +17,11 @@ from utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLa
 from read_data import read_data_sets
 
 FLAGS = None
+CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), 'planet_train')
+
 
 def read_and_decode(filename_queue):
+  """ Read and decode images and labels from protobuf format """
   reader = tf.TFRecordReader()
   _, serialized_example = reader.read(filename_queue)
 
@@ -30,7 +33,6 @@ def read_and_decode(filename_queue):
 
   features = tf.parse_single_example(serialized_example, features=feature_dict)
 
-  # Convert from a scalar string tensor to a uint8 tensor
   image = tf.decode_raw(features['image_raw'], tf.float64)
   image = tf.cast(image, tf.float32)
   image.set_shape([Image.SIZE])
@@ -47,7 +49,8 @@ def debug_inputs(filename):
   filename_queue = tf.train.string_input_producer([filename])
   image, labels = read_and_decode(filename_queue)
 
-  init_op = tf.initialize_all_variables()
+  init_op = tf.group(tf.global_variables_initializer(),
+                     tf.local_variables_initializer())
   with tf.Session() as sess:
       sess.run(init_op)
       coord = tf.train.Coordinator()
@@ -60,7 +63,7 @@ def debug_inputs(filename):
           print(labels['common'].get_shape())
           print(labels['common'].eval())
 
-def inputs(filename, batch_size, num_epochs):
+def inputs(filename, batch_size, num_epochs, shuffle=True):
   """Reads input data num_epochs times.
   Args:
     filename: input filename to read from
@@ -79,29 +82,32 @@ def inputs(filename, batch_size, num_epochs):
   if not num_epochs: num_epochs = None
 
   with tf.name_scope('input'):
-    filename_queue = tf.train.string_input_producer(
-        [filename], num_epochs=num_epochs)
+    filename_queue = tf.train.string_input_producer([filename], num_epochs=num_epochs)
 
-    # Even when reading in multiple threads, share the filename
-    # queue.
+    # Even when reading in multiple threads, share the filename queue.
     image, image_labels = read_and_decode(filename_queue)
 
     # Shuffle the examples and collect them into batch_size batches. Runs in two threads to avoid
     # being a bottleneck. While image_labels was a dict, shuffle batch expects tensors. So this will
     # return a list of tensors which we reconstruct into a dict.
-    shuffled = tf.train.shuffle_batch(
-        [image] + image_labels.values(), batch_size=batch_size, num_threads=1,
-        capacity=1000 + 3 * batch_size,
-        # Ensures a minimum amount of shuffling of examples.
-        min_after_dequeue=1000)
+    if shuffle:
+      shuffled = tf.train.shuffle_batch(
+          [image] + image_labels.values(), batch_size=batch_size, num_threads=1,
+          capacity=1000 + 3 * batch_size, min_after_dequeue=1000)
 
-    images = shuffled[0]
-    labels = OrderedDict()
-    for label_type, label_tensor in zip(image_labels.keys(), shuffled[1:]):
-      labels[label_type] = label_tensor
+      images = shuffled[0]
+      labels = OrderedDict()
+      for label_type, label_tensor in zip(image_labels.keys(), shuffled[1:]):
+        labels[label_type] = label_tensor
 
     return images, labels
 
+
+def get_prediction_ops(logits, labels, cutoff):
+  """ Return the weather and ground predictions. """
+  weather_preds = tf.argmax(logits['weather'], axis=1)
+  ground_preds = tf.greater(logits['common'], logit(cutoff))
+  return weather_preds, tf.cast(ground_preds, tf.float32)
 
 def get_metric_ops(logits, labels, cutoff=0.5):
   """ Build metric ops with uniform cutoff """
@@ -118,17 +124,19 @@ def get_metric_ops(logits, labels, cutoff=0.5):
 
   # Weather labels are mutually exclusive, so we pick argmax for the prediction and one-hot encode
   # them so we can count tp, fp, etc.
-  preds = tf.one_hot(tf.argmax(logits['weather'], axis=1), depth=len(ImageLabels.LABELS['weather']))
-  tp, fp, tn, fn = confusion_matrix(preds, labels['weather'])
+  weather_preds, ground_preds = get_prediction_ops(logits, labels, cutoff)
+  
+  # One-hot encode weather preds to count tp, fp, etc. Accuracy for weather prediction is just % of TP
+  one_hot_weather_preds = tf.one_hot(weather_preds, depth=len(ImageLabels.LABELS['weather']))
+  weather_tp, weather_fp, weather_tn, weather_fn = confusion_matrix(one_hot_weather_preds, labels['weather'])
+  weather_accuracy = tf.reduce_mean(tf.cast(weather_tp, tf.float32))
 
   # We currently do not predict special labels. Add common label results to the current counts.
-  preds = tf.greater(logits['common'], logit(cutoff))
-  preds = tf.cast(preds, tf.float32)
-  common_tp, common_fp, common_tn, common_fn = confusion_matrix(preds, labels['common'])
-  tp += common_tp
-  fp += common_fp
-  tn += common_tn
-  fn += common_fn
+  common_tp, common_fp, common_tn, common_fn = confusion_matrix(ground_preds, labels['common'])
+  tp = weather_tp + common_tp
+  fp = weather_fp + common_fp
+  tn = weather_tn + common_tn
+  fn = weather_fn + common_fn
       
   # Calculate precision, recall and F2 score.
   precision = tp / (tp + fp)
@@ -143,45 +151,45 @@ def get_metric_ops(logits, labels, cutoff=0.5):
   recall = replace_nans(recall)
   f2_score = replace_nans(f2_score)
 
-  return tf.reduce_mean(precision), tf.reduce_mean(recall), tf.reduce_mean(f2_score)
+  metrics = OrderedDict([
+    ('precision', tf.reduce_mean(precision)),
+    ('recall', tf.reduce_mean(recall)),
+    ('f2_score', tf.reduce_mean(f2_score)),
+    ('weather_accuracy', weather_accuracy),
+  ])
+  
+  return metrics
 
 
-def run_training(training_filename):
+def run_training(filename, params):
   """Train MNIST for a number of steps."""
   # Tell TensorFlow that the model will be built into the default Graph.
   with tf.Graph().as_default():
     # Input images and labels. Default values for now, read from args later
-    images, labels = inputs(training_filename, batch_size=50, num_epochs=1)
+    images, labels = inputs(filename, batch_size=100, num_epochs=1)
 
     # Build a Graph that computes predictions from the inference model.
-    logits = strawman(images)
-
-    # Add to the Graph the loss calculation. Weather labels are mutually exclusive, so we use softmax
-    # other labels are not exclusive, so use a sigmoid. For now don't include special labels in the
-    # loss function
-    loss_op = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-                 labels=labels['weather'], logits=logits['weather'])) + \
-              tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-                 targets=labels['common'], logits=logits['common']))
-
+    logits = inference(images)
+    loss_op = loss(logits=logits, labels=labels)
     train_op = tf.train.AdamOptimizer(1e-4).minimize(loss_op)
 
     # The op for initializing the variables.
     init_op = tf.group(tf.global_variables_initializer(),
                        tf.local_variables_initializer())
 
-    precision_op, recall_op, f2_op = get_metric_ops(logits, labels, cutoff=0.1)
+    metric_ops = get_metric_ops(logits, labels, cutoff=params['cutoff'])
 
-    # Create a session for running operations in the Graph.
+    # Create a session and a saver
     sess = tf.Session()
-
-    # Initialize the variables (the trained variables and the
-    # epoch counter).
     sess.run(init_op)
+    saver = tf.train.Saver(tf.global_variables())
 
     # Start input enqueue threads.
     coord = tf.train.Coordinator()
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+    
+    def summary_str(op_values):
+      return ', '.join(['{} = {:.3f}'.format(key, val) for key, val in op_values.items()])
 
     try:
       step = 0
@@ -189,38 +197,49 @@ def run_training(training_filename):
         start_time = time.time()
         is_summary_step = (step % 25) == 0
 
-        ops_to_compute = [train_op]
-        if is_summary_step:
-          ops_to_compute.extend([loss_op, f2_op])
+        ops_to_compute = OrderedDict([
+          ('train', train_op),
+          ('loss', loss_op)
+        ])
 
-        op_values = sess.run(ops_to_compute)
+        if is_summary_step:
+          ops_to_compute.update([
+            ('f2', metric_ops['f2_score']),
+            ('weather_accuracy', metric_ops['weather_accuracy']),
+          ])
+
+        op_values = OrderedDict(zip(ops_to_compute.keys(), sess.run(ops_to_compute.values())))
+        # Discard the training op
+        op_values.pop('train')
+
         duration = time.time() - start_time
 
         # Print an overview fairly often.
         if is_summary_step:
-          loss_value, f2_score = op_values[1:]
           # Add metrics to TensorBoard.    
           # tf.summary.scalar('Precision', precision)
           # tf.summary.scalar('Recall', recall)
           # tf.summary.scalar('f2-score', f2_score)
-
-          print('Step {}: loss = {:.3f}, F2 = {:.3f}  ({:.3f} sec)'
-                .format(step, loss_value, f2_score, duration))
+          print('Step {}: {} ({:.3f} sec)'.format(step, summary_str(op_values), duration))
 
         step += 1
     except tf.errors.OutOfRangeError:
       print('Done training for %d epochs, %d steps.' % (1, step))
+      # TODO: Report
     finally:
       # When done, ask the threads to stop.
       coord.request_stop()
+
+    # Save a checkpoint
+    saver.save(sess, os.path.join(CHECKPOINT_DIR, 'model.ckpt'), global_step=step)
+    print("Saved checkpoint")
 
     # Wait for threads to finish.
     coord.join(threads)
     sess.close()
 
 
-
-def strawman(x):
+def inference(x):
   """builds the graph for a strawman for classifying digits.
 
   Args:
@@ -241,7 +260,7 @@ def strawman(x):
   flat_dim = int(Image.SIZE / (filter_size) ** 2)
   h_pool1_flat = tf.reshape(h_pool1, [-1, flat_dim])
 
-  # Map the 1024 features to weather and common classes
+  # Map the features to weather and common classes
   weights = OrderedDict()
   biases = OrderedDict()
   logits = OrderedDict()
@@ -273,9 +292,9 @@ def strawman(x):
 
 
 
-# def conv2d(x, W):
-#   """conv2d returns a 2d convolution layer with full stride."""
-#   return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+def conv2d(x, W):
+  """conv2d returns a 2d convolution layer with full stride."""
+  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
 
 
 def max_pool(x, filter_size):
@@ -295,6 +314,113 @@ def bias_variable(shape):
   initial = tf.constant(0.1, shape=shape)
   return tf.Variable(initial)
 
+
+def loss(logits, labels):
+  """ Build the loss op given logits, labels. Both are dicts with keys 'weather', 'common'.
+  Weather labels are mutually exclusive so we use cross entropy with softmax. Ground labels are
+  multi-class, so we use sigmoid cross entropy.
+
+  Note: the softmax x-entropy returns a 1-D tensor, whereas sigmoid x-entropy returns a 2-D tensor
+  with the same shape as logits. Investigate whether summing the means is the right thing to do. """
+
+  return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                        labels=labels['weather'], logits=logits['weather'])) + \
+         tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+                        targets=labels['common'], logits=logits['common']))
+
+
+def get_global_step_from_checkpoint(ckpt):
+    return ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+
+def restore_checkpoint(saver, sess):
+    ckpt = tf.train.get_checkpoint_state(CHECKPOINT_DIR)
+    if not ckpt or not ckpt.model_checkpoint_path: 
+      raise IOError('No checkpoint file found')
+
+    if ckpt and ckpt.model_checkpoint_path:
+      saver.restore(sess, ckpt.model_checkpoint_path)
+    # Extract global_step from model_checkpoint_path, assuming it looks something like:
+    # /project_path/train/model.ckpt-0
+      global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+
+      return ckpt, global_step
+
+
+def get_labels_from_predictions(weather_preds, ground_preds):
+  """ Get the prediction labels. Weather predictions are the labels index; ground preds are a binary
+  matrix """
+  labels = []
+  for idx in range(weather_preds.shape[0]):
+    weather_label = ImageLabels.LABELS['weather'][weather_preds[idx]]
+    ground_labels = [ImageLabels.LABELS['common'][col] for col in np.nonzero(ground_preds[idx])[0]]
+    labels.append([weather_label] + ground_labels)
+  return labels
+
+def eval_once(saver, metric_ops, pred_ops):
+  """Run Eval once. """
+  with tf.Session() as sess:
+    ckpt, global_step = restore_checkpoint(saver, sess)
+
+    # Start the queue runners.
+    coord = tf.train.Coordinator()
+    try:
+      threads = []
+      for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+        threads.extend(qr.create_threads(sess, coord=coord, daemon=True,
+                                         start=True))
+
+      # num_iter = int(math.ceil(FLAGS.num_examples / FLAGS.batch_size))
+      # true_count = 0  # Counts the number of correct predictions.
+      # total_sample_count = num_iter * FLAGS.batch_size
+      # step = 0
+
+      # It's not clear when the coordinator stops... This runs for many iterations
+      while not coord.should_stop():
+        def summary_str(op_values):
+            return ', '.join(['{} = {:.3f}'.format(key, val) for key, val in op_values.items()])
+
+        # Add names to the various ops
+        metric_values = sess.run(metric_ops.values())
+        print(summary_str({metric: val for metric, val in zip(metric_ops.keys(), metric_values)}))
+
+        weather_preds, ground_preds = sess.run(pred_ops)
+        predicted_labels = get_labels_from_predictions(weather_preds, ground_preds)
+        for idx, labels in enumerate(predicted_labels[:20]):
+          print(idx, ' '.join(labels))
+
+        break
+        
+      # summary = tf.Summary()
+      # summary.ParseFromString(sess.run(summary_op))
+      # summary.value.add(tag='Precision @ 1', simple_value=precision)
+      # summary_writer.add_summary(summary, global_step)
+    except Exception as e:  # pylint: disable=broad-except
+      coord.request_stop(e)
+
+    coord.request_stop()
+    coord.join(threads, stop_grace_period_secs=10)
+
+
+def evaluate(filename, params):
+  """ Evaluate the model """
+  with tf.Graph().as_default() as g:
+    images, labels = inputs(filename, batch_size=500, num_epochs=None)
+    logits = inference(images)
+
+    metric_ops = get_metric_ops(logits, labels, cutoff=params['cutoff'])
+    pred_ops = get_prediction_ops(logits, labels, cutoff=params['cutoff'])
+
+    # Restore the variables for evaluation
+    saver = tf.train.Saver(tf.global_variables())
+
+    # Build the summary operation based on the TF collection of Summaries.
+    # summary_op = tf.merge_all_summaries()
+    # summary_writer = tf.train.SummaryWriter(FLAGS.eval_dir, g)
+
+    # The original cifar10 code runs multiple evaluation steps -- figure out why?
+    eval_once(saver, metric_ops, pred_ops)  # , summary_writer, summary_op)
+
+
 def get_filename(dataset, start_idx, end_idx):
   """ Get filename with given start, end indices. No filename validation. """
   assert dataset in ['train', 'test', 'validation'], \
@@ -303,9 +429,22 @@ def get_filename(dataset, start_idx, end_idx):
                       'images.{}.{}_{}.proto'.format(dataset, start_idx, end_idx))
 
 def main(_):
-  filename = get_filename('train', 0, 1999)
-  # debug_inputs(filename)
-  run_training(filename)
+  filenames = {
+    'train': get_filename('train', 0, 1999),
+    'validation': get_filename('validation', 2000, 2499),
+    'test': get_filename('test', 2500, 2999)
+  }
+
+  params = {
+    'cutoff': 0.5
+  }
+
+  print("Training")
+  # run_training(filenames['train'], params)
+
+  print("Evaluating on test data:")
+  evaluate(filenames['test'], params)
+
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
