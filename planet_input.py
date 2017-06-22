@@ -70,7 +70,8 @@ def inputs(filename, batch_size, num_epochs, shuffle=True):
     Note that an tf.train.QueueRunner is added to the graph, which
     must be run using e.g. tf.train.start_queue_runners().
   """
-  if not num_epochs: num_epochs = None
+  if not num_epochs:
+    num_epochs = None
 
   with tf.name_scope('input'):
     filename_queue = tf.train.string_input_producer([filename], num_epochs=num_epochs)

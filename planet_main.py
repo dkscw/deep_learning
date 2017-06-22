@@ -19,7 +19,7 @@ from planet_inference import inference, loss
 from planet_metrics import get_metric_ops, get_prediction_ops, get_labels_from_predictions
 
 FLAGS = None
-CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), 'planet_train')
+CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), 'planet_train_ckpt')
 
 
 def run_training(filename, params):
@@ -27,7 +27,7 @@ def run_training(filename, params):
   # Tell TensorFlow that the model will be built into the default Graph.
   with tf.Graph().as_default():
     # Input images and labels. Default values for now, read from args later
-    images, labels = inputs(filename, batch_size=100, num_epochs=1)
+    images, labels = inputs(filename, batch_size=2000, num_epochs=1)
 
     # Build a Graph that computes predictions from the inference model.
     logits = inference(images)

@@ -163,6 +163,7 @@ def serialize_batch(filename, start=0, end=KagglePlanetImage.NUM_TRAIN_IMAGES, v
             pass
     writer.close()
 
+
 def parse_args():
     """ Parse command line arguments """
     parser = argparse.ArgumentParser()
@@ -174,6 +175,7 @@ def parse_args():
                         help='data set type, default train. added to output filename')
                         
     return parser.parse_args()
+
 
 if __name__ == '__main__':
     """ Example: Serialize a batch of 10000 images """

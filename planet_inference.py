@@ -25,7 +25,7 @@ def inference(x):
 
   # Pooling layer - downsamples by 16X to dimension 16x16x4
   filter_size = 16
-  h_pool1 = max_pool(x_image, filter_size)
+  h_pool1 = avg_pool(x_image, filter_size)
 
   # Flatten
   flat_dim = int(Image.SIZE / (filter_size) ** 2)
@@ -73,6 +73,11 @@ def max_pool(x, filter_size):
   return tf.nn.max_pool(x, ksize=[1, filter_size, filter_size, 1],
                         strides=[1, filter_size, filter_size, 1], padding='SAME')
 
+
+def avg_pool(x, filter_size):
+  """downsamples a feature map by filter_size"""
+  return tf.nn.avg_pool(x, ksize=[1, filter_size, filter_size, 1],
+                        strides=[1, filter_size, filter_size, 1], padding='SAME')
 
 def weight_variable(shape):
   """weight_variable generates a weight variable of a given shape."""
