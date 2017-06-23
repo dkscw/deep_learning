@@ -31,16 +31,30 @@ class KagglePlanetImageLabels(object):
     """ Class to handle image labels. Only needs to be initialized once. """
     LABELS = OrderedDict([
         ('weather', ['clear',
-                    'partly_cloudy',
-                    'haze',
-                    'cloudy']),
+                     'partly_cloudy',
+                     'haze',
+                     'cloudy']),
         ('common', ['primary',
-                   'agriculture',
-                   'road',
-                   'water',
-                   'cultivation',
-                   'habitation']),
+                    'agriculture',
+                    'road',
+                    'water',
+                    'cultivation',
+                    'habitation']),
         ('special', ['bare_ground',
+                     'selective_logging',
+                     'artisinal_mine',
+                     'blooming',
+                     'slash_burn',
+                     'blow_down',
+                     'conventional_mine']),
+        # Ground labels include both common and special labels
+        ('ground', ['primary',
+                    'agriculture',
+                    'road',
+                    'water',
+                    'cultivation',
+                    'habitation',
+                    'bare_ground',
                     'selective_logging',
                     'artisinal_mine',
                     'blooming',
@@ -83,6 +97,9 @@ class KagglePlanetImage(object):
     HEIGHT, WIDTH, DEPTH = 256, 256, 4
     SIZE = HEIGHT * WIDTH * DEPTH
 
+    class ImageError(ValueError):
+        pass
+
     def __init__(self, seqnum, is_training_image=True):
         """ Initialize with sequence number. If is_training_image is False, then read from the test
         set. There are no labels for the test set. """
@@ -104,7 +121,10 @@ class KagglePlanetImage(object):
         mode = 'train' if self.is_training_image else 'test'
         tif_path = os.path.join(DATA_DIR, '{}-tif'.format(mode), '{}_{}.tif'.format(mode, self.seqnum))  # noqa
         jpg_path = os.path.join(DATA_DIR, '{}-jpg'.format(mode), '{}_{}.jpg'.format(mode, self.seqnum))  # noqa
-        return skimage.io.imread(tif_path), skimage.io.imread(jpg_path)
+        try:
+            return skimage.io.imread(tif_path), skimage.io.imread(jpg_path)
+        except ValueError:  # Invalid TIFF
+            raise self.ImageError
 
     def as_feature_dict(self):
         """ Return a dict representation of the image where the values are tensorflow features """
