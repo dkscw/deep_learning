@@ -219,7 +219,7 @@ def build_model_combined():
     """the above two models combined"""
     model_id = 'conv_and_dilated_conv_1'
     input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
-    image_input = Input(input_shape)
+    image_input = layers.Input(input_shape)
 
     #traditional convolution
     conv1 = layers.Conv2D(filters=32, kernel_size=(8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
@@ -238,7 +238,7 @@ def build_model_combined():
     dila1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(dila1)
     dila1 = layers.Dropout(0.25)(dila1)
     #second set
-    dila1 = layers.Conv2D(filters=32, kernel_size=(4, 4), dilateion_rate=(2, 2), padding='valid', activation='relu')(dila1)
+    dila1 = layers.Conv2D(filters=32, kernel_size=(4, 4), dilation_rate=(2, 2), padding='valid', activation='relu')(dila1)
     dila1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(dila1)
     dila1 = layers.Dropout(0.25)(dila1)
     #finish with flattening
@@ -248,8 +248,8 @@ def build_model_combined():
     #combine
     combo1 = layers.concatenate([conv1, dila1])
     combo1 = layers.Dense(256, activation='relu')(combo1)
-    combo1 = layes.Dense(N_LABELS, activation='softmax')(combo1)
-    model = Model(inputs=image_input, outputs=combo1)
+    combo1 = layers.Dense(N_LABELS, activation='softmax')(combo1)
+    model = models.Model(inputs=image_input, outputs=combo1)
     model.compile(optimizer='adam',
                   loss=loss,
                   metrics=[weather_accuracy_metric, f2_metric])
