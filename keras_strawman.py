@@ -70,7 +70,15 @@ def fbeta(y_true, y_pred, beta=2, threshold_shift=0):
     y_pred = K.clip(y_pred, 0, 1)
 
     # shifting the prediction threshold from .5 if needed
-    y_pred_bin = K.round(y_pred + threshold_shift)
+    # y_pred_bin = K.round(y_pred + threshold_shift)
+
+    # change this to use argmax for weather where there's one true label
+    w_indicies = K.argmax(y_pred[:, :N_WEATHER_LABELS],1)
+    y_pred_bin_w = K.one_hot(w_indicies, len(ImageLabels.LABELS['weather'])) #second parameter is depth
+    # and just round for ground
+    y_pred_bin_g = K.round(y_pred[:,N_WEATHER_LABELS:] + threshold_shift)
+    #combine
+    y_pred_bin = K.concatenate([y_pred_bin_w, y_pred_bin_g],1)
 
     tp = K.sum(K.round(y_true * y_pred_bin)) + K.epsilon()
     fp = K.sum(K.round(K.clip(y_pred_bin - y_true, 0, 1)))
