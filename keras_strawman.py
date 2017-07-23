@@ -194,7 +194,7 @@ def main():
     np.random.seed(1233)
 
     print "Building model..."
-    model, model_id = build_model()
+    model, model_id = build_model_2()
     model_filename_head = '{}_{}'.format(model_id, timestamp)
     model_filepath = os.path.join(MODEL_DIR, model_filename_head + '.hdf5')
     callback_list = setup_callbacks(model_filename_head)  
