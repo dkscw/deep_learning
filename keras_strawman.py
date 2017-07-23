@@ -12,6 +12,7 @@ from planet_utils import KagglePlanetImage as Image, KagglePlanetImageLabels as 
 
 MODEL_DIR = os.path.join(DATA_DIR, 'models')
 CHECKPOINT_DIR = os.path.join(MODEL_DIR, 'checkpoints')
+LOGS_DIR = os.path.join(MODEL_DIR, 'logs')
 
 BATCH_SIZE = 128
 
@@ -194,12 +195,12 @@ def build_model_dilated():
     input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
     model = models.Sequential()
     #going from 256x256x4 to 64x64x32
-    model.add(layers.Conv2D(filters=32, kernel_size = (8, 8), dilation_rate=(4, 4), input_shape=input_shape, padding='valid', activation='relu'))
+    model.add(layers.Conv2D(filters=32, kernel_size = (4, 4), dilation_rate=(4, 4), input_shape=input_shape, padding='valid', activation='relu'))
     # model.add(layers.Conv2D(filters=32, kernel_size = (16, 16, 32), strides=(2, 2), padding='valid', activation='relu'))
     model.add(layers.pooling.MaxPooling2D(pool_size=(4, 4)))    
     model.add(layers.Dropout(0.25))
 
-    model.add(layers.Conv2D(filters=32, kernel_size=(8, 8), dilation_rate=(4, 4), padding='valid', activation='relu'))
+    model.add(layers.Conv2D(filters=32, kernel_size=(4, 4), dilation_rate=(2, 2), padding='valid', activation='relu'))
     model.add(layers.pooling.MaxPooling2D(pool_size=(4, 4)))
     model.add(layers.Dropout(0.25))
     
@@ -216,10 +217,13 @@ def build_model_dilated():
 
 def setup_callbacks(filename_head):
     """ Set up checkpoint callback """
-    filepath = os.path.join(CHECKPOINT_DIR, filename_head + '_{epoch:02d}_chkpt.hdf5')
-    checkpoint = callbacks.ModelCheckpoint(filepath)
-    callback_list = [checkpoint]
-    return callback_list
+    checkpoint_filename = os.path.join(CHECKPOINT_DIR, filename_head + '_{epoch:02d}_chkpt.hdf5')
+    checkpoint_callback = callbacks.ModelCheckpoint(checkpoint_filename)
+
+    log_filename = os.path.join(LOGS_DIR, filename_head + '.log.csv')
+    csv_logger_callback = callbacks.CSVLogger(log_filename, separator=',', append=False)
+
+    return [checkpoint_callback, csv_logger_callback]
 
 def main():
     """ Build model and evaluate it on training and test data """
@@ -228,7 +232,7 @@ def main():
     np.random.seed(1233)
 
     print "Building model..."
-    model, model_id = build_model_2()
+    model, model_id = build_model_dilated()
     model_filename_head = '{}_{}'.format(model_id, timestamp)
     model_filepath = os.path.join(MODEL_DIR, model_filename_head + '.hdf5')
     callback_list = setup_callbacks(model_filename_head)  
