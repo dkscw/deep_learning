@@ -222,7 +222,7 @@ def build_model_combined():
     image_input = Input(input_shape)
 
     #traditional convolution
-    conv1 = Conv2D(filters=32, kernel_size=(8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
+    conv1 = layers.Conv2D(filters=32, kernel_size=(8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
     conv1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(conv1)
     conv1 = layers.Dropout(0.25)(conv1)
     #second set
@@ -234,7 +234,7 @@ def build_model_combined():
     conv1 = layers.Dense(128, activation='relu')(conv1)
 
     #dilated convolution
-    dila1 = Conv2D(filters=32, kernel_size=(4, 4), dilation_rate=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
+    dila1 = layers.Conv2D(filters=32, kernel_size=(4, 4), dilation_rate=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
     dila1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(dila1)
     dila1 = layers.Dropout(0.25)(dila1)
     #second set
@@ -246,8 +246,9 @@ def build_model_combined():
     dila1 = layers.Dense(128, activation='relu')(dila1)
 
     #combine
-    combol = keras.layers.concatenate([conv1, dila1])
-    combo1 = Dense(N_LABELS, activation='softmax')(combo1)
+    combo1 = layers.concatenate([conv1, dila1])
+    combo1 = layers.Dense(256, activation='relu')(combo1)
+    combo1 = layes.Dense(N_LABELS, activation='softmax')(combo1)
     model = Model(inputs=image_input, outputs=combo1)
     model.compile(optimizer='adam',
                   loss=loss,
