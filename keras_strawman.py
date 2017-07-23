@@ -214,6 +214,47 @@ def build_model_dilated():
 
     return model, model_id
 
+def build_model_combined():
+    """the above two models combined"""
+    model_id = 'conv_and_dilated_conv_1'
+    input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
+    image_input = Input(input_shape)
+
+    #traditional convolution
+    conv1 = Conv2D(filters=32, kernel_size=(8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
+    conv1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(conv1)
+    conv1 = layers.Dropout(0.25)(conv1)
+    #second set
+    conv1 = layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(2, 2), padding='valid', activation='relu')(conv1)
+    conv1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(conv1)
+    conv1 = layers.Dropout(0.25)(conv1)
+    #finish with flattening
+    conv1 = layers.Flatten()(conv1)
+    conv1 = layers.Dense(128, activation='relu')(conv1)
+
+    #dilated convolution
+    dila1 = Conv2D(filters=32, kernel_size=(4, 4), dilation_rate=(4, 4), input_shape=input_shape, padding='valid', activation='relu')(image_input)
+    dila1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(dila1)
+    dila1 = layers.Dropout(0.25)(dila1)
+    #second set
+    dila1 = layers.Conv2D(filters=32, kernel_size=(4, 4), dilateion_rate=(2, 2), padding='valid', activation='relu')(dila1)
+    dila1 = layers.pooling.MaxPooling2D(pool_size=(4, 4))(dila1)
+    dila1 = layers.Dropout(0.25)(dila1)
+    #finish with flattening
+    dila1 = layers.Flatten()(dila1)
+    dila1 = layers.Dense(128, activation='relu')(dila1)
+
+    #combine
+    combol = keras.layers.concatenate([conv1, dila1])
+    combo1 = Dense(N_LABELS, activation='softmax')(combo1)
+    model = Model(inputs=image_input, outputs=combo1)
+    model.compile(optimizer='adam',
+                  loss=loss,
+                  metrics=[weather_accuracy_metric, f2_metric])
+
+    return model, model_id
+
+
 def setup_callbacks(filename_head):
     """ Set up checkpoint callback """
     filepath = os.path.join(CHECKPOINT_DIR, filename_head + '_{epoch:02d}_chkpt.hdf5')
