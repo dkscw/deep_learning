@@ -4,6 +4,7 @@ from datetime import datetime
 import pytz
 import numpy as np
 import tensorflow as tf
+import numpy as np
 from keras import models, layers, losses, metrics, callbacks
 
 from planet_utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLabels, DATA_DIR
@@ -45,7 +46,6 @@ def generate_images_and_labels(start_index, end_index=Image.NUM_TRAIN_IMAGES, ba
 
         yield images, labels
 
-
 def loss(y_true, y_pred):
     """ Build the loss function given true labels and predicted probabilities.
     Weather labels are mutually exclusive so we use categorical cross entropy ("cross entropy with
@@ -63,6 +63,26 @@ def loss(y_true, y_pred):
 
 def weather_accuracy_metric(y_true, y_pred):
     return metrics.categorical_accuracy(y_true[:, :N_WEATHER_LABELS], y_pred[:, :N_WEATHER_LABELS])
+
+def fbeta(y_true, y_pred, beta=2, threshold_shift=0):
+    # just in case of hipster activation at the final layer
+    y_pred = K.clip(y_pred, 0, 1)
+
+    # shifting the prediction threshold from .5 if needed
+    y_pred_bin = K.round(y_pred + threshold_shift)
+
+    tp = K.sum(K.round(y_true * y_pred_bin)) + K.epsilon()
+    fp = K.sum(K.round(K.clip(y_pred_bin - y_true, 0, 1)))
+    fn = K.sum(K.round(K.clip(y_true - y_pred, 0, 1)))
+
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+
+    beta_squared = beta ** 2
+    return (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall)
+
+def f2_metric(y_true, y_pred):
+    return fbeta(K.variable(y_true), K.variable(y_pred), beta=2).eval(session=K.get_session())
 
 # def f2_metric(y_true, y_pred):
 #     """ Return list of metrics """
@@ -158,6 +178,8 @@ def build_model_2():
                   metrics=[weather_accuracy_metric])
 
     return model, model_id
+
+from keras import backend as K
 
 def setup_callbacks(filename_head):
     """ Set up checkpoint callback """
