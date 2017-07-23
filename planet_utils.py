@@ -100,14 +100,14 @@ class KagglePlanetImage(object):
     class ImageError(ValueError):
         pass
 
-    def __init__(self, seqnum, is_training_image=True):
+    def __init__(self, seqnum, is_training_image=True, read_jpg=False):
         """ Initialize with sequence number. If is_training_image is False, then read from the test
         set. There are no labels for the test set. """
         assert seqnum in range(self.NUM_TRAIN_IMAGES), \
                "Sequence number must be between 0 and {}".format(self.NUM_TRAIN_IMAGES)
         self.seqnum = seqnum
         self.is_training_image = is_training_image
-        self.image, self.jpg = self._read_image()
+        self.image, self.jpg = self._read_image(read_jpg=read_jpg)
         self.image = self.image * 1. / self.image.max()  # Normalize
         # Labels. For now only process common labels.
         self.labels = None
@@ -116,13 +116,15 @@ class KagglePlanetImage(object):
             for label_type in self.label_processor.LABELS:
                 self.labels[label_type] = self.label_processor.get_label_array(seqnum, label_type)
 
-    def _read_image(self):
+    def _read_image(self, read_jpg=False):
         """ Read the image, both tif and jpg. The tif returns a 256x256x4 numpy array """
         mode = 'train' if self.is_training_image else 'test'
-        tif_path = os.path.join(DATA_DIR, '{}-tif'.format(mode), '{}_{}.tif'.format(mode, self.seqnum))  # noqa
+        tif_path = os.path.join(DATA_DIR, '{}-tif'.format(mode), '{}_{:05d}.tif'.format(mode, self.seqnum))  # noqa
         jpg_path = os.path.join(DATA_DIR, '{}-jpg'.format(mode), '{}_{}.jpg'.format(mode, self.seqnum))  # noqa
         try:
-            return skimage.io.imread(tif_path), skimage.io.imread(jpg_path)
+            tif = skimage.io.imread(tif_path)
+            jpg = skimage.io.imread(jpg_path) if read_jpg else None
+            return tif, jpg
         except ValueError:  # Invalid TIFF
             raise self.ImageError
 
