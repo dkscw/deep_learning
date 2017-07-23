@@ -73,12 +73,12 @@ def fbeta(y_true, y_pred, beta=2, threshold_shift=0):
     # y_pred_bin = K.round(y_pred + threshold_shift)
 
     # change this to use argmax for weather where there's one true label
-    w_indicies = K.argmax(y_pred[:, :N_WEATHER_LABELS],1)
-    y_pred_bin_w = K.one_hot(w_indicies, len(ImageLabels.LABELS['weather'])) #second parameter is depth
+    w_indicies = K.argmax(y_pred[:, :N_WEATHER_LABELS], 1)
+    y_pred_bin_w = K.one_hot(w_indicies, N_WEATHER_LABELS)  # second parameter is depth
     # and just round for ground
     y_pred_bin_g = K.round(y_pred[:,N_WEATHER_LABELS:] + threshold_shift)
     #combine
-    y_pred_bin = K.concatenate([y_pred_bin_w, y_pred_bin_g],1)
+    y_pred_bin = K.concatenate([y_pred_bin_w, y_pred_bin_g], 1)
 
     tp = K.sum(K.round(y_true * y_pred_bin)) + K.epsilon()
     fp = K.sum(K.round(K.clip(y_pred_bin - y_true, 0, 1)))
@@ -168,7 +168,7 @@ def build_model_2():
     input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
     model = models.Sequential()
     #going from 256x256x4 to 64x64x32
-    model.add(layers.Conv2D(filters=32, kernel_size = (8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu'))
+    model.add(layers.Conv2D(filters=32, kernel_size=(8, 8), strides=(4, 4), input_shape=input_shape, padding='valid', activation='relu'))
     # model.add(layers.Conv2D(filters=32, kernel_size = (16, 16, 32), strides=(2, 2), padding='valid', activation='relu'))
     model.add(layers.pooling.MaxPooling2D(pool_size=(4, 4)))    
     model.add(layers.Dropout(0.25))
@@ -207,7 +207,7 @@ def main():
     model_filepath = os.path.join(MODEL_DIR, model_filename_head + '.hdf5')
     callback_list = setup_callbacks(model_filename_head)  
 
-    print "Training model..."
+    print "Training model... Model id: {}".format(model_id)
     n_train_samples = 32000
     n_test_samples = 8000
 
