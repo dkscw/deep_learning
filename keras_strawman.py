@@ -1,10 +1,15 @@
 """ Keras strawman to predict the weather label using a single batch of numpy images """
-
+import os
+from datetime import datetime
+import pytz
 import numpy as np
 import tensorflow as tf
-from keras import models, layers, losses, metrics
+from keras import models, layers, losses, metrics, callbacks
 
-from planet_utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLabels
+from planet_utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLabels, DATA_DIR
+
+MODEL_DIR = os.path.join(DATA_DIR, 'models')
+CHECKPOINT_DIR = os.path.join(MODEL_DIR, 'checkpoints')
 
 BATCH_SIZE = 128
 
@@ -12,56 +17,31 @@ N_WEATHER_LABELS = len(ImageLabels.LABELS['weather'])
 N_GROUND_LABELS = len(ImageLabels.LABELS['ground'])
 N_LABELS = N_WEATHER_LABELS + N_GROUND_LABELS
 
-def read_images_and_labels(start_idx=0, n_images=BATCH_SIZE):
-    """ Read images as numpy array """	
-    images = np.zeros((n_images, Image.HEIGHT, Image.WIDTH, Image.DEPTH))
-    labels = np.zeros((n_images, N_LABELS))
-
-    # Ensure that we read n_images even if some of them can't be loaded, unless there are none left
-    array_idx, image_idx = 0, start_idx
-    while array_idx < n_images:
-        try:
-            image = Image(image_idx)
-        except Image.ImageError:
-            print "Bad image at index ", image_idx 
-        else:
-            images[array_idx] = image.image
-            labels[array_idx] = image.labels['weather']
-            array_idx += 1
-        image_idx += 1
-
-    return images, labels, image_idx
-
-
 def generate_images_and_labels(start_index, end_index=Image.NUM_TRAIN_IMAGES, batch_size=BATCH_SIZE,
                                shuffle=True):
     " A generator that yields a batch of images and labels. The generator must loop indefinitely. "
-    def restart():
-        index = start_index
+    def generate_next_image():
         r = np.arange(start_index, end_index)
-        perm = np.random.permutation(r) if shuffle else r
-        return index, perm
+        while True:
+            perm = np.random.permutation(r) if shuffle else r
+            for idx in perm:
+                try:
+                    image = Image(idx)
+                except Image.ImageError:  # Skip bad images
+                    continue
+                yield image
 
-    image_idx, perm = restart()
+    image_generator = generate_next_image()
 
     while True:
         images = np.zeros((batch_size, Image.HEIGHT, Image.WIDTH, Image.DEPTH))
         labels = np.zeros((batch_size, N_LABELS))
     
-        array_idx = 0
-        while array_idx < batch_size:
-            try:
-                image = Image(perm[image_idx])
-            except Image.ImageError:
-                pass
-            else:
-                images[array_idx] = image.image
-                labels[array_idx, :N_WEATHER_LABELS] = image.labels['weather']
-                labels[array_idx, N_WEATHER_LABELS:] = image.labels['ground']
-                array_idx += 1
-            image_idx += 1
-            if image_idx == end_index:
-                image_idx, perm = restart()
+        for array_idx in range(batch_size):
+            image = image_generator.next()
+            images[array_idx] = image.image
+            labels[array_idx, :N_WEATHER_LABELS] = image.labels['weather']
+            labels[array_idx, N_WEATHER_LABELS:] = image.labels['ground']
 
         yield images, labels
 
@@ -140,6 +120,7 @@ def weather_accuracy_metric(y_true, y_pred):
 
 def build_model():
     """ Build and compile the strawman model, which includes a pooling layer and a dense layer """
+    model_id = 'strawman'
     input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
     pooling_layer = layers.pooling.AveragePooling2D(pool_size=(16, 16), input_shape=input_shape)
     flattening_layer = layers.Flatten()
@@ -150,20 +131,34 @@ def build_model():
                   loss=loss,
                   metrics=[weather_accuracy_metric])
 
-    return model
+    return model, model_id
 
+def setup_callbacks(filename_head):
+    """ Set up checkpoint callback """
+    filepath = os.path.join(CHECKPOINT_DIR, filename_head + '_{epoch:02d}_chkpt.hdf5')
+    checkpoint = callbacks.ModelCheckpoint(filepath)
+    callback_list = [checkpoint]
+    return callback_list
 
 def main():
     """ Build model and evaluate it on training and test data """
+    # Seed the random generator for reproducibility
+    timestamp = '{:%Y-%m-%d-%H:%M:%S}'.format(datetime.now(pytz.utc))
+    np.random.seed(1233)
+
     print "Building model..."
-    model = build_model()
+    model, model_id = build_model()
+    model_filename_head = '{}_{}'.format(model_id, timestamp)
+    model_filepath = os.path.join(MODEL_DIR, model_filename_head + '.hdf5')
+    callback_list = setup_callbacks(model_filename_head)  
 
     print "Training model..."
     n_train_samples = 32000
     n_test_samples = 8000
 
     training_data_generator = generate_images_and_labels(0, n_train_samples)
-    model.fit_generator(training_data_generator, n_train_samples / BATCH_SIZE, epochs=5)
+    model.fit_generator(training_data_generator, n_train_samples / BATCH_SIZE, epochs=5, callbacks=callback_list)
+    model.save(model_filepath)
 
     print "Evaluating..."
     training_data_generator = generate_images_and_labels(0, n_train_samples, shuffle=False)
@@ -172,8 +167,9 @@ def main():
                                                      shuffle=False)
 
     in_sample_score = model.evaluate_generator(training_data_generator, n_train_samples / BATCH_SIZE)
-    oos_score = model.evaluate_generator(test_data_generator, n_test_samples / BATCH_SIZE)
     print "In sample: {}".format(in_sample_score)
+
+    oos_score = model.evaluate_generator(test_data_generator, n_test_samples / BATCH_SIZE)
     print "Out of sample: {}".format(oos_score)
 
 
