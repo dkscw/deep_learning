@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 import numpy as np
 from keras import models, layers, losses, metrics, callbacks
+from keras import backend as K
 
 from planet_utils import KagglePlanetImage as Image, KagglePlanetImageLabels as ImageLabels, DATA_DIR
 
@@ -82,7 +83,7 @@ def fbeta(y_true, y_pred, beta=2, threshold_shift=0):
     return (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall)
 
 def f2_metric(y_true, y_pred):
-    return fbeta(K.variable(y_true), K.variable(y_pred), beta=2).eval(session=K.get_session())
+    return fbeta(y_true, y_pred, beta=2)
 
 # def f2_metric(y_true, y_pred):
 #     """ Return list of metrics """
@@ -149,7 +150,7 @@ def build_model():
 
     model.compile(optimizer='adam',
                   loss=loss,
-                  metrics=[weather_accuracy_metric])
+                  metrics=[weather_accuracy_metric, f2_metric])
 
     return model, model_id
 
@@ -175,11 +176,9 @@ def build_model_2():
 
     model.compile(optimizer='adam',
                   loss=loss,
-                  metrics=[weather_accuracy_metric])
+                  metrics=[weather_accuracy_metric, f2_metric])
 
     return model, model_id
-
-from keras import backend as K
 
 def setup_callbacks(filename_head):
     """ Set up checkpoint callback """
@@ -195,7 +194,7 @@ def main():
     np.random.seed(1233)
 
     print "Building model..."
-    model, model_id = build_model_2()
+    model, model_id = build_model()
     model_filename_head = '{}_{}'.format(model_id, timestamp)
     model_filepath = os.path.join(MODEL_DIR, model_filename_head + '.hdf5')
     callback_list = setup_callbacks(model_filename_head)  
