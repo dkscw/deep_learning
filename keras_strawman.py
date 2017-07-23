@@ -133,6 +133,32 @@ def build_model():
 
     return model, model_id
 
+def build_model_2():
+    """"slightly less strawman model"""
+    model_id = 'conv_1'
+    input_shape = (Image.HEIGHT, Image.WIDTH, Image.DEPTH)
+    model = Sequential()
+    #going from 256x256x4 to 64x64x32
+    model.add(layers.Conv2D(filters=32, kernel_size = (16, 16, 4), strides=(1, 1), input_shape=input_shape, padding='valid', activation='relu'))
+    model.add(layers.Conv2D(filters=32, kernel_size = (16, 16, 32), strides=(2, 2), padding='valid', activation='relu'))
+    model.add(layers.pooling.MaxPooling2D(pool_size=(2,2)))    
+    model.add(layers.Dropout(0.25))
+
+    model.add(layers.Conv2D(filters=32, kernel_size=(16,16,32), strides=(1, 1), padding='valid', activation='relu'))
+    model.add(layers.pooling.MaxPooling2D(pool_size=(2,2)))
+    model.add(layers.Dropout(0.25))
+    
+    model.add(layers.Flatten())
+    model.add(layers.Dense(128, activation='relu'))
+    model.add(layers.Dropout(0.25))
+    model.add(layers.Dense(N_LABELS, activation='softmax'))
+
+    model.compile(optimizer='adam',
+                  loss=loss,
+                  metrics=[weather_accuracy_metric])
+
+    return model, model_id
+
 def setup_callbacks(filename_head):
     """ Set up checkpoint callback """
     filepath = os.path.join(CHECKPOINT_DIR, filename_head + '_{epoch:02d}_chkpt.hdf5')
