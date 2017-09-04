@@ -179,8 +179,9 @@ def main():
                                                          n_train_samples + n_validation_samples + n_test_samples,
                                                          shuffle=False)
 
-        in_sample_score = model.evaluate_generator(training_data_generator, n_train_samples / BATCH_SIZE)
-        print "In sample: {}".format(in_sample_score)
+        # Evaluation is very slow, only compute OOS
+        # in_sample_score = model.evaluate_generator(training_data_generator, n_train_samples / BATCH_SIZE)
+        # print "In sample: {}".format(in_sample_score)
 
         oos_score = model.evaluate_generator(test_data_generator, n_test_samples / BATCH_SIZE)
         print "Out of sample: {}".format(oos_score)
